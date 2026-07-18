@@ -130,19 +130,47 @@ extension UnifiedSymbolGraph {
                 self.target = relationship.target
                 self.kind = relationship.kind
             }
-
-            static func makePair(fromRelation relationship: SymbolGraph.Relationship) -> (RelationKey, SymbolGraph.Relationship) {
-                return (RelationKey(fromRelation: relationship), relationship)
-            }
         }
 
         let allRelations = relationsList.joined()
 
-        // deduplicate the combined relationships array by source/target/kind
+        // Deduplicate by source/target/kind, preserving first-seen order so the result is
+        // stable, and picking a deterministic winner for duplicates so the choice doesn't
+        // depend on graph merge order.
         // FIXME: Actually merge relationships if they have different mixins (rdar://84267943)
-        let map = [:].merging(allRelations.map({ RelationKey.makePair(fromRelation: $0) }), uniquingKeysWith: { r1, r2 in r1 })
+        var order = [RelationKey]()
+        var map = [RelationKey: SymbolGraph.Relationship]()
+        for relationship in allRelations {
+            let key = RelationKey(fromRelation: relationship)
+            if let existing = map[key] {
+                map[key] = Self.preferredRelationship(existing, relationship)
+            } else {
+                map[key] = relationship
+                order.append(key)
+            }
+        }
 
-        return Array(map.values)
+        return order.map { map[$0]! }
+    }
+
+    /// Picks a deterministic winner between two relationships that share the same source,
+    /// target, and kind, so deduplication is independent of the order they were merged in.
+    private static func preferredRelationship(
+        _ first: SymbolGraph.Relationship,
+        _ second: SymbolGraph.Relationship
+    ) -> SymbolGraph.Relationship {
+        // Prefer a present target fallback; when both are present, prefer the
+        // lexicographically smaller one for a stable choice.
+        switch (first.targetFallback, second.targetFallback) {
+        case let (firstFallback?, secondFallback?):
+            return firstFallback <= secondFallback ? first : second
+        case (_?, nil):
+            return first
+        case (nil, _?):
+            return second
+        case (nil, nil):
+            return first
+        }
     }
 
     /// Scans over ``orphanRelationships`` and sorts any whose source/target symbols were loaded

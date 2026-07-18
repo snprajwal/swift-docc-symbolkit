@@ -134,6 +134,44 @@ class UnifiedGraphTests: XCTestCase {
         let extensionSymModule = try XCTUnwrap(extensionSym.modules[.init(forSymbolGraph: extensionSyms)!])
         XCTAssertEqual(extensionSymModule.name, "OtherKit")
     }
+
+    /// The same relationship sourced from different graph slices can carry different target
+    /// fallbacks. Deduplication must collapse them to a single relationship whose surviving
+    /// fallback doesn't depend on the order the slices were merged in.
+    func testMergeRelationshipsDeduplicatesDeterministically() throws {
+        let graph = try XCTUnwrap(UnifiedSymbolGraph(
+            fromSingleGraph: makeSymbolGraph(symbols: [], relations: []),
+            at: .init(fileURLWithPath: "DemoKit.symbols.json")))
+
+        let unqualified = SymbolGraph.Relationship(
+            source: "s:SomeType", target: "s:SomeProtocol", kind: .conformsTo, targetFallback: "SomeProtocol")
+        let qualified = SymbolGraph.Relationship(
+            source: "s:SomeType", target: "s:SomeProtocol", kind: .conformsTo, targetFallback: "OtherModule.SomeProtocol")
+
+        let forward = graph.mergeRelationships([unqualified], [qualified])
+        let backward = graph.mergeRelationships([qualified], [unqualified])
+
+        XCTAssertEqual(forward.count, 1)
+        XCTAssertEqual(backward.count, 1)
+        XCTAssertEqual(forward, backward, "Dedup winner must not depend on merge order")
+        // "OtherModule.SomeProtocol" < "SomeProtocol", so it's the stable winner either way.
+        XCTAssertEqual(forward.first?.targetFallback, "OtherModule.SomeProtocol")
+    }
+
+    /// Deduplication preserves the order in which distinct relationships are first seen.
+    func testMergeRelationshipsPreservesFirstSeenOrder() throws {
+        let graph = try XCTUnwrap(UnifiedSymbolGraph(
+            fromSingleGraph: makeSymbolGraph(symbols: [], relations: []),
+            at: .init(fileURLWithPath: "DemoKit.symbols.json")))
+
+        let relations = ["s:A", "s:B", "s:C"].map {
+            SymbolGraph.Relationship(source: "s:SomeType", target: $0, kind: .conformsTo, targetFallback: nil)
+        }
+        // Second list repeats the same relationships; the result should still be the three
+        // distinct edges in their first-seen order.
+        let merged = graph.mergeRelationships(relations, relations)
+        XCTAssertEqual(merged.map(\.target), ["s:A", "s:B", "s:C"])
+    }
 }
 
 /// Compare the given lists of relationships and assert that they contain the same relationships.

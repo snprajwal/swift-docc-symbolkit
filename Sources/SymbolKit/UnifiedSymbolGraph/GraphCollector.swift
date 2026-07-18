@@ -102,7 +102,9 @@ extension GraphCollector {
     public func finishLoading(
         createOverloadGroups: Bool = false
     ) -> (unifiedGraphs: [String: UnifiedSymbolGraph], graphSources: [String: [GraphKind]]) {
-        for (url, graph) in self.extensionGraphs {
+        // Merge extension graphs in a stable order so the merge result doesn't depend on
+        // the hash-randomized iteration order of `extensionGraphs`.
+        for (url, graph) in self.extensionGraphs.sorted(by: { $0.key.absoluteString < $1.key.absoluteString }) {
             self.mergeSymbolGraph(graph, at: url, forceLoading: true)
         }
 
